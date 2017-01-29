@@ -50,6 +50,8 @@ class MeshObject {
 public:
 	MeshObject(MeshData* mesh, Texture* image, vec3 position) : mesh(mesh), image(image) {
 		M = mat4::Translation(position.x(), position.y(), position.z());
+		isLowRes = (image->height <= 16);
+		preImage = nullptr;
 	}
 
 	void render(TextureUnit tex) {
@@ -60,6 +62,7 @@ public:
 	}
 
 	void setTexture(Texture* tex) {
+		delete image;
 		image = tex;
 	}
 
@@ -67,7 +70,29 @@ public:
 		return image;
 	}
 
+	void setImage() {
+		if (preImage != nullptr) {
+			// create new texture to assign preImage data and overwrite old texture
+			Texture* nextImage = new Texture(preImage->width, preImage->height, preImage->format, preImage->readable);
+			u8* data = nextImage->lock();
+			// assign correct colors RGBA (from image) -> BGRA (from texture)
+			for (int i = 0; i < preImage->width * preImage->height * 4; i += 4) {
+				data[i] = preImage->data[i + 2];
+				data[i + 1] = preImage->data[i + 1];
+				data[i + 2] = preImage->data[i];
+				data[i + 3] = preImage->data[i + 3];
+			}
+			nextImage->unlock();
+			setTexture(nextImage);
+			delete preImage;
+			// do not repeat this every time
+			preImage = nullptr;
+		}
+	}
+
 	mat4 M;
+	Kore::Image* preImage;
+	bool isLowRes;
 private:
 	MeshData* mesh;
 	Texture* image;
@@ -89,6 +114,13 @@ namespace {
 	mat4 V;
 
 	vec3 position;
+	
+	// vertical angle of fov
+	float fov = 60.0f;
+
+	// approximation of horizontal angle of fov (because the formula is easier than 2*atan(tan(fov)*width/height))
+	float hfov = (float)fov * width / height;
+	
 	bool up = false, down = false, left = false, right = false;
 
 	Thread* streamingThread;
@@ -107,6 +139,38 @@ namespace {
 			// to use a mutex, create a Mutex variable and call Create to initialize the mutex (see main()). Then you can use Lock/Unlock.
 			streamMutex.Lock();
 
+			// iterate the MeshObjects
+			MeshObject** currentPtr = &objects[0];
+			// load new preImages for every box if necessary
+			while (*currentPtr != nullptr) {
+				MeshObject* current = (*currentPtr);
+				// read the position dependent on the current view (in camera coordinates)
+				mat4 VM = V*current->M;
+				// zPos with an offset of 3 because the position depends on the center of the box and we want to know when the object is fully behind the camera
+				float zPos = VM.get(2, 3) + 3;
+				// get cosine of view angle to box (as to kick out higher resolution images outside the fov)
+				vec3 camViewDir = vec3(0, 0, 1);
+				vec3 objVec = vec3(VM.get(0, 3), VM.get(1, 3), zPos);
+				objVec.normalize();
+				float cosine = camViewDir * objVec;
+				// higher resolution image if box is near enough and not outside the approximate horizontal fov of the camera
+				if (zPos < 40 && cosine >= Kore::cos((float)(hfov / 2) / 180.0f * pi)) {
+					if (current->isLowRes) {
+						delete current->preImage;
+						current->preImage = new Kore::Image("darmstadt.jpg", true);
+						current->isLowRes = false;
+					}
+				}
+				else {
+					// kick out higher resolution (preImage will be overwritten)
+					if (!current->isLowRes) {
+						delete current->preImage;
+						current->preImage = new Kore::Image("darmstadtmini.png", true);
+						current->isLowRes = true;
+					}
+				}
+				++currentPtr;
+			}
 			// load darmstadt.jpg files for near boxes
 			// reload darmstadt.jpg for every box, pretend that every box has a different texture (I don't want to upload 100 images though)
 			// feel free to create more versions of darmstadt.jpg at different sizes
@@ -122,6 +186,16 @@ namespace {
 	void update() {
 		float t = (float)(System::time() - startTime);
 		Kore::Audio::update();
+		MeshObject** current = &objects[0];
+
+		Graphics::begin();
+		Graphics::clear(Graphics::ClearColorFlag | Graphics::ClearDepthFlag, 0xff9999FF, 1000.0f);
+
+		// Update textures, if needed
+		while (*current != nullptr) {
+			(*current)->setImage();
+			++current;
+		}
 
 		const float speed = 0.1f;
 		if (up) position.z() += speed;
@@ -130,7 +204,7 @@ namespace {
 		if (right) position.x() += speed;
 		
 		Graphics::begin();
-		Graphics::clear(Graphics::ClearColorFlag | Graphics::ClearDepthFlag, 0xff9999FF, 1000.0f);
+		Graphics::clear(Graphics::ClearColorFlag | Graphics::ClearDepthFlag, 0xff9999FF, 1.0f);
 		
 		program->set();
 
@@ -149,7 +223,7 @@ namespace {
 
 
 		// iterate the MeshObjects
-		MeshObject** current = &objects[0];
+		current = &objects[0];
 		while (*current != nullptr) {
 			// set the model matrix
 			Graphics::setMatrix(mLocation, (*current)->M);
