@@ -14,6 +14,10 @@
 
 using namespace Kore;
 
+namespace {
+	Mutex streamMutex;
+}
+
 class MeshData {
 public:
 	MeshData(const char* meshFile, const VertexStructure& structure) {
@@ -71,6 +75,7 @@ public:
 	}
 
 	void setImage() {
+		streamMutex.Lock();
 		if (preImage != nullptr) {
 			// create new texture to assign preImage data and overwrite old texture
 			Texture* nextImage = new Texture(preImage->width, preImage->height, preImage->format, preImage->readable);
@@ -88,6 +93,7 @@ public:
 			// do not repeat this every time
 			preImage = nullptr;
 		}
+		streamMutex.Unlock();
 	}
 
 	mat4 M;
@@ -124,7 +130,6 @@ namespace {
 	bool up = false, down = false, left = false, right = false;
 
 	Thread* streamingThread;
-	Mutex streamMutex;
 
 	// uniform locations - add more as you see fit
 	TextureUnit tex;
@@ -136,9 +141,6 @@ namespace {
 
 	void stream(void*) {
 		for (;;) {
-			// to use a mutex, create a Mutex variable and call Create to initialize the mutex (see main()). Then you can use Lock/Unlock.
-			streamMutex.Lock();
-
 			// iterate the MeshObjects
 			MeshObject** currentPtr = &objects[0];
 			// load new preImages for every box if necessary
@@ -156,30 +158,27 @@ namespace {
 				// higher resolution image if box is near enough and not outside the approximate horizontal fov of the camera
 				if (zPos < 40 && cosine >= Kore::cos((float)(hfov / 2) / 180.0f * pi)) {
 					if (current->isLowRes) {
+						Kore::Image* nextImage = new Kore::Image("darmstadt.jpg", true);
+						streamMutex.Lock();
 						delete current->preImage;
-						current->preImage = new Kore::Image("darmstadt.jpg", true);
+						current->preImage = nextImage;
 						current->isLowRes = false;
+						streamMutex.Unlock();
 					}
 				}
 				else {
 					// kick out higher resolution (preImage will be overwritten)
 					if (!current->isLowRes) {
+						Kore::Image* nextImage = new Kore::Image("darmstadtmini.png", true);
+						streamMutex.Lock();
 						delete current->preImage;
-						current->preImage = new Kore::Image("darmstadtmini.png", true);
+						current->preImage = nextImage;
 						current->isLowRes = true;
+						streamMutex.Unlock();
 					}
 				}
 				++currentPtr;
 			}
-			// load darmstadt.jpg files for near boxes
-			// reload darmstadt.jpg for every box, pretend that every box has a different texture (I don't want to upload 100 images though)
-			// feel free to create more versions of darmstadt.jpg at different sizes
-			// always use less than 1 million pixels of texture data (the example code uses 100 16x16 textures - that's 25600 pixels, darmstadt.jpg is 512x512 aka 262144 pixels)
-
-			// Beware, neither OpenGL nor Direct3D is thread safe - you can't just create a Texture in a second thread. But you can create a Kore::Image
-			// in another thread, access it's pixels in the main thread and put them in a Kore::Texture using lock/unlock.
-
-			streamMutex.Unlock();
 		}
 	}
 
