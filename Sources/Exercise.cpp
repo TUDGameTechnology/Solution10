@@ -10,6 +10,8 @@
 #include <Kore/Graphics4/PipelineState.h>
 #include <Kore/Threads/Thread.h>
 #include <Kore/Threads/Mutex.h>
+
+#include "Memory.h"
 #include "ObjLoader.h"
 
 using namespace Kore;
@@ -322,8 +324,9 @@ namespace {
 }
 
 int kore(int argc, char** argv) {
-	Kore::System::init("Exercise 11", width, height);
+	Kore::System::init("Solution 10", width, height);
 	
+	Memory::init();
 	init();
 
 	Kore::System::setCallback(update);
